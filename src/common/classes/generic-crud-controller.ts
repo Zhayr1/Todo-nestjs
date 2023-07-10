@@ -1,4 +1,6 @@
+import { GetUser } from '@/auth/decorators/user.decorator';
 import { User } from '@/auth/entities/user.entity';
+import { JwtAuthGuard } from '@/auth/guards/jwt-auth.guard';
 import {
   Body,
   Controller,
@@ -7,13 +9,16 @@ import {
   HttpStatus,
   Inject,
   Param,
-  ParseIntPipe,
   Post,
   Put,
   Request,
   Type,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { ObjectLiteral } from 'typeorm';
+import { AbstractValidationPipe } from '../pipes/abstract-validation-pipe';
 
 export interface RequestWithUser extends Request {
   user: User;
@@ -27,23 +32,27 @@ export interface GenericResponse {
 export interface CrudService<CreateDto, UpdateDto, Entity> {
   create(dto: CreateDto, userId: number): Promise<Entity>;
   read(userId: number): Promise<Entity[]>;
-  readById(userId: number, entityId: number): Promise<Entity>;
-  update(dto: UpdateDto, userId: number, entityId: number): Promise<Entity>;
-  deleteById(userId: number, entityId: number): Promise<void>;
+  readById(userId: number, entityId: number | string): Promise<Entity>;
+  update(
+    dto: UpdateDto,
+    userId: number,
+    entityId: number | string,
+  ): Promise<Entity>;
+  deleteById(userId: number, entityId: number | string): Promise<void>;
 }
 
 export interface GenericCrudController<CreateDto, UpdateDto, Entity> {
-  findAllEntities(req: RequestWithUser): Promise<Entity[]>;
-  findOneEntity(req: RequestWithUser, entityId: number): Promise<Entity>;
-  createEntity(req: RequestWithUser, dto: CreateDto): Promise<GenericResponse>;
+  findAllEntities(userId: number): Promise<Entity[]>;
+  findOneEntity(userId: number, entityId: number | string): Promise<Entity>;
+  createEntity(userId: number, dto: CreateDto): Promise<GenericResponse>;
   updateEntity(
     dto: UpdateDto,
-    req: RequestWithUser,
-    entityId: number,
+    userId: number,
+    entityId: number | string,
   ): Promise<GenericResponse>;
   deleteEntity(
-    req: RequestWithUser,
-    entityId: number,
+    userId: number,
+    entityId: number | string,
   ): Promise<GenericResponse>;
 }
 
@@ -52,11 +61,25 @@ export function GenericCrudController<
   UpdateEntityDto,
   Entity extends ObjectLiteral,
 >(
-  serviceObject: CrudService<CreateEntityDto, UpdateEntityDto, Entity>,
+  serviceObject: Type<CrudService<CreateEntityDto, UpdateEntityDto, Entity>>,
   prefix: string,
+  createDto: Type<CreateEntityDto>,
+  updateDto: Type<UpdateEntityDto>,
   entityName?: string,
 ): Type<GenericCrudController<CreateEntityDto, UpdateEntityDto, Entity>> {
+  const createPipe = new AbstractValidationPipe(
+    { whitelist: true, transform: true },
+    { body: createDto },
+  );
+
+  const updatePipe = new AbstractValidationPipe(
+    { whitelist: true, transform: true },
+    { body: updateDto },
+  );
+
   @Controller(prefix)
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   class GenericCrudControllerHost {
     constructor(
       @Inject(serviceObject)
@@ -64,55 +87,57 @@ export function GenericCrudController<
     ) {}
 
     @Get()
-    async findAllEntities(@Request() req: RequestWithUser) {
-      return this.service.read(req.user.id);
+    async findAllEntities(@GetUser('id') userId: number) {
+      return this.service.read(userId);
     }
 
     @Get(':id')
     async findOneEntity(
-      @Request() req: RequestWithUser,
-      @Param('id', ParseIntPipe) entityId: number,
+      @GetUser('id') userId: number,
+      @Param('id') entityId: string,
     ) {
-      return this.service.readById(req.user.id, entityId);
+      return this.service.readById(userId, entityId);
     }
 
     @Post()
+    @UsePipes(createPipe)
     async createEntity(
-      @Request() req: RequestWithUser,
+      @GetUser('id') userId: number,
       @Body() dto: CreateEntityDto,
     ) {
-      await this.service.create(dto, req.user.id);
+      await this.service.create(dto, userId);
 
       return {
         statusCode: HttpStatus.CREATED,
-        message: `${entityName || 'Entity'} created successfully`,
+        message: `${entityName ? entityName : 'Entity'} created successfully`,
       };
     }
 
     @Put(':id')
+    @UsePipes(updatePipe)
     async updateEntity(
       @Body() dto: UpdateEntityDto,
-      @Request() req: RequestWithUser,
-      @Param('id', ParseIntPipe) entityId: number,
+      @GetUser('id') userId: number,
+      @Param('id') entityId: string,
     ) {
-      await this.service.update(dto, req.user.id, entityId);
+      await this.service.update(dto, userId, entityId);
 
       return {
         statusCode: HttpStatus.OK,
-        message: `${entityName || 'Entity'} updated successfully`,
+        message: `${entityName ? entityName : 'Entity'} updated successfully`,
       };
     }
 
     @Delete(':id')
     async deleteEntity(
-      @Request() req: RequestWithUser,
-      @Param('id', ParseIntPipe) entityId: number,
+      @GetUser('id') userId: number,
+      @Param('id') entityId: string,
     ) {
-      await this.service.deleteById(req.user.id, entityId);
+      await this.service.deleteById(userId, entityId);
 
       return {
         statusCode: HttpStatus.OK,
-        message: `${entityName || 'Entity'} deleted successfully`,
+        message: `${entityName ? entityName : 'Entity'} deleted successfully`,
       };
     }
   }
